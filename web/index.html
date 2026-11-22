@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HelpDesk Agent + Failure Lab</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2230; --muted:#667085; --line:#e3e6ec; --accent:#2f5bd8; --bad:#b42318; --ok:#067647; --warn:#b54708; --code:#f1f3f7; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2029; --ink:#e8ebf2; --muted:#98a2b3; --line:#2b3240; --accent:#7b9bff; --bad:#f97066; --ok:#47cd89; --warn:#fdb022; --code:#242b38; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { margin:0; font-size:18px; } header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  main { display:grid; grid-template-columns: 300px 1fr 1fr; gap:14px; padding:14px; max-width:1400px; margin:0 auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+  h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  label { display:block; margin:8px 0 3px; font-size:13px; color:var(--muted); }
+  select, input[type=text], input[type=number] { width:100%; padding:8px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); font:inherit; }
+  .check { display:flex; gap:8px; align-items:center; margin:7px 0; color:var(--ink); font-size:14px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--bg); color:var(--ink); border-radius:7px; padding:7px 10px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:hover { filter:brightness(.96); }
+  .presets { display:flex; flex-direction:column; gap:5px; }
+  .presets button { text-align:left; font-size:13px; }
+  #log { display:flex; flex-direction:column; gap:8px; max-height:52vh; overflow:auto; margin-bottom:10px; }
+  .msg { padding:9px 11px; border-radius:9px; white-space:pre-wrap; word-break:break-word; }
+  .me { background:var(--accent); color:#fff; align-self:flex-end; max-width:85%; }
+  .bot { background:var(--code); max-width:92%; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px; margin-bottom:4px; background:var(--line); }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  form { display:flex; gap:8px; } form input { flex:1; }
+  .ev { border-left:3px solid var(--line); padding:2px 0 2px 9px; margin:0 0 8px; font-size:13px; }
+  .ev.api { border-color:var(--warn); } .ev.assistant { border-color:var(--accent); }
+  .ev b { font-weight:600; } .ev .t { color:var(--muted); font-variant-numeric:tabular-nums; }
+  pre { margin:3px 0 0; padding:6px 8px; background:var(--code); border-radius:6px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .hint { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HelpDesk Agent + Failure Lab</h1>
+  <p>Ask the assistant something, break the system on purpose, and read the logs to see why it behaved that way.</p>
+</header>
+<main>
+  <section>
+    <h2>Lab controls</h2>
+    <label>Quick-load a failure scenario</label>
+    <div class="presets" id="presets"></div>
+    <label for="fault">ServiceNow API fault mode</label>
+    <select id="fault">
+      <option value="none">none (healthy)</option>
+      <option value="auth_expired">auth_expired (every call 401)</option>
+      <option value="rate_limit_first2">rate_limit_first2 (first 2 calls 429)</option>
+      <option value="rate_limit">rate_limit (every call 429)</option>
+      <option value="schema_v2">schema_v2 (renamed fields)</option>
+    </select>
+    <label>Assistant settings</label>
+    <div class="check"><input type="checkbox" id="legacy"><span>Index the legacy KB folder (kb_extra)</span></div>
+    <div class="check"><input type="checkbox" id="latest"><span>Prefer newest article on conflict</span></div>
+    <div class="check"><input type="checkbox" id="normalize" checked><span>Normalize ticket numbers</span></div>
+    <label for="chunk">Chunk size (words)</label>
+    <input type="number" id="chunk" value="80" min="5" max="200">
+    <p class="hint">Defaults: 80 words, legacy off, newest-first off, normalization on.</p>
+  </section>
+
+  <section>
+    <h2>Chat</h2>
+    <div id="log"><div class="hint">Try: "How do I connect to the VPN from home?", "Create a ticket: my laptop screen is flickering", or "What's the status of ticket 4521?"</div></div>
+    <form id="form">
+      <input type="text" id="msg" placeholder="Ask the assistant..." autocomplete="off">
+      <button class="primary" type="submit" id="send">Send</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Log timeline <span id="trace" class="hint"></span></h2>
+    <div id="timeline"><div class="hint">Each answer shows the assistant and API events for that request, in order, with one trace ID.</div></div>
+  </section>
+</main>
+<script>
+const PRESETS = [
+  {n:"03  Outdated VPN answer", q:"How do I connect to the VPN from home?", legacy:true},
+  {n:"04  Retest of 03", q:"How do I connect to the VPN from home?", legacy:true, latest:true},
+  {n:"05  Answers cut off", q:"I forgot my password, how do I reset it?", chunk:12},
+  {n:"07  All tickets failing", q:"Create a ticket: my laptop screen is flickering", fault:"auth_expired"},
+  {n:"08  Intermittent lookups", q:"What's the status of INC0004521?", fault:"rate_limit_first2"},
+  {n:"09  Busy all day", q:"What's the status of INC0004521?", fault:"rate_limit"},
+  {n:"10  Ticket not found", q:"What's the status of ticket 4521?", normalize:false},
+  {n:"11  Retest of 10", q:"What's the status of ticket 4521?"},
+  {n:"12  After API upgrade", q:"Create a ticket: my laptop screen is flickering", fault:"schema_v2"},
+  {n:"Reset to healthy defaults", q:"", reset:true},
+];
+const $ = id => document.getElementById(id);
+function setControls(p) {
+  $("fault").value = p.fault || "none";
+  $("legacy").checked = !!p.legacy; $("latest").checked = !!p.latest;
+  $("normalize").checked = p.normalize !== false; $("chunk").value = p.chunk || 80;
+  if (p.q) $("msg").value = p.q;
+}
+PRESETS.forEach(p => { const b = document.createElement("button"); b.type="button"; b.textContent = p.n; b.onclick = () => setControls(p); $("presets").appendChild(b); });
+
+function add(cls, html) { const d = document.createElement("div"); d.className = "msg " + cls; d.innerHTML = html; $("log").appendChild(d); $("log").scrollTop = 1e9; return d; }
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const tagClass = o => o === "ok" || o === "answered" ? "ok" : (o === "low_confidence" || o === "rate_limited" ? "warn" : "bad");
+
+function renderTimeline(r) {
+  $("trace").textContent = r.trace_id;
+  $("timeline").innerHTML = r.timeline.map(e =>
+    `<div class="ev ${e.component}"><span class="t">+${e.t.toFixed(2)}s</span> <b>${esc(e.component)}</b> ${esc(e.event)}` +
+    (Object.keys(e.data).length ? `<pre>${esc(JSON.stringify(e.data, null, 1))}</pre>` : "") + `</div>`).join("");
+}
+
+$("form").onsubmit = async ev => {
+  ev.preventDefault();
+  const message = $("msg").value.trim(); if (!message) return;
+  $("msg").value = ""; $("send").disabled = true;
+  add("me", esc(message));
+  const wait = add("bot", "<span class='hint'>Thinking...</span>");
+  try {
+    const res = await fetch("/ui/chat", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify({
+      message, fault: $("fault").value,
+      options: {include_legacy_kb: $("legacy").checked, prefer_latest_on_conflict: $("latest").checked,
+                normalize_args: $("normalize").checked, chunk_size_words: parseInt($("chunk").value, 10)}})});
+    const r = await res.json();
+    if (r.error) { wait.innerHTML = esc(r.error); }
+    else { wait.innerHTML = `<span class="tag ${tagClass(r.outcome)}">${esc(r.outcome)}</span><br>${esc(r.answer)}`; renderTimeline(r); }
+  } catch (e) { wait.innerHTML = "Request failed: " + esc(e.message); }
+  $("send").disabled = false; $("msg").focus();
+};
+</script>
+</body>
+</html>

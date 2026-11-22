@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HelpDesk Agent + Failure Lab</title>
+<style>
+  :root { --bg:#f6f7f9; --card:#fff; --ink:#1c2230; --muted:#667085; --line:#e3e6ec; --accent:#2f5bd8; --bad:#b42318; --ok:#067647; --warn:#b54708; --code:#f1f3f7; }
+  @media (prefers-color-scheme: dark) { :root { --bg:#12151c; --card:#1b2029; --ink:#e8ebf2; --muted:#98a2b3; --line:#2b3240; --accent:#7b9bff; --bad:#f97066; --ok:#47cd89; --warn:#fdb022; --code:#242b38; } }
+  * { box-sizing: border-box; }
+  body { margin:0; font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--ink); }
+  header { padding:14px 20px; border-bottom:1px solid var(--line); background:var(--card); }
+  header h1 { margin:0; font-size:18px; } header p { margin:2px 0 0; color:var(--muted); font-size:13px; }
+  main { display:grid; grid-template-columns: 300px 1fr 1fr; gap:14px; padding:14px; max-width:1400px; margin:0 auto; }
+  @media (max-width: 1000px) { main { grid-template-columns: 1fr; } }
+  section { background:var(--card); border:1px solid var(--line); border-radius:10px; padding:14px; min-width:0; }
+  h2 { margin:0 0 10px; font-size:13px; text-transform:uppercase; letter-spacing:.04em; color:var(--muted); }
+  label { display:block; margin:8px 0 3px; font-size:13px; color:var(--muted); }
+  select, input[type=text], input[type=number] { width:100%; padding:8px; border:1px solid var(--line); border-radius:7px; background:var(--bg); color:var(--ink); font:inherit; }
+  .check { display:flex; gap:8px; align-items:center; margin:7px 0; color:var(--ink); font-size:14px; }
+  button { font:inherit; border:1px solid var(--line); background:var(--bg); color:var(--ink); border-radius:7px; padding:7px 10px; cursor:pointer; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button:hover { filter:brightness(.96); }
+  .presets { display:flex; flex-direction:column; gap:5px; }
+  .presets button { text-align:left; font-size:13px; }
+  #log { display:flex; flex-direction:column; gap:8px; max-height:52vh; overflow:auto; margin-bottom:10px; }
+  .msg { padding:9px 11px; border-radius:9px; white-space:pre-wrap; word-break:break-word; }
+  .me { background:var(--accent); color:#fff; align-self:flex-end; max-width:85%; }
+  .bot { background:var(--code); max-width:92%; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px; margin-bottom:4px; background:var(--line); }
+  .tag.ok { color:var(--ok); } .tag.bad { color:var(--bad); } .tag.warn { color:var(--warn); }
+  form { display:flex; gap:8px; } form input { flex:1; }
+  .ev { border-left:3px solid var(--line); padding:2px 0 2px 9px; margin:0 0 8px; font-size:13px; }
+  .ev.api { border-color:var(--warn); } .ev.assistant { border-color:var(--accent); }
+  .ev b { font-weight:600; } .ev .t { color:var(--muted); font-variant-numeric:tabular-nums; }
+  pre { margin:3px 0 0; padding:6px 8px; background:var(--code); border-radius:6px; overflow:auto; font-size:12px; white-space:pre-wrap; word-break:break-word; }
+  .hint { color:var(--muted); font-size:13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>HelpDesk Agent + Failure Lab</h1>
+  <p>Ask the assistant something, break the system on purpose, and read the logs to see why it behaved that way.</p>
+  <p style="margin-top:8px;color:var(--warn)"><b>Static demo:</b> this page replays recorded runs of the real app (click a scenario on the left). Free-text chat needs the live version: see the README.</p>
+</header>
+<main>
+  <section>
+    <h2>Lab controls</h2>
+    <label>Quick-load a failure scenario</label>
+    <div class="presets" id="presets"></div>
+    <label for="fault">ServiceNow API fault mode</label>
+    <select id="fault">
+      <option value="none">none (healthy)</option>
+      <option value="auth_expired">auth_expired (every call 401)</option>
+      <option value="rate_limit_first2">rate_limit_first2 (first 2 calls 429)</option>
+      <option value="rate_limit">rate_limit (every call 429)</option>
+      <option value="schema_v2">schema_v2 (renamed fields)</option>
+    </select>
+    <label>Assistant settings</label>
+    <div class="check"><input type="checkbox" id="legacy"><span>Index the legacy KB folder (kb_extra)</span></div>
+    <div class="check"><input type="checkbox" id="latest"><span>Prefer newest article on conflict</span></div>
+    <div class="check"><input type="checkbox" id="normalize" checked><span>Normalize ticket numbers</span></div>
+    <label for="chunk">Chunk size (words)</label>
+    <input type="number" id="chunk" value="80" min="5" max="200">
+    <p class="hint">Defaults: 80 words, legacy off, newest-first off, normalization on.</p>
+  </section>
+
+  <section>
+    <h2>Chat</h2>
+    <div id="log"><div class="hint">Try: "How do I connect to the VPN from home?", "Create a ticket: my laptop screen is flickering", or "What's the status of ticket 4521?"</div></div>
+    <form id="form">
+      <input type="text" id="msg" placeholder="Ask the assistant..." autocomplete="off">
+      <button class="primary" type="submit" id="send">Send</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Log timeline <span id="trace" class="hint"></span></h2>
+    <div id="timeline"><div class="hint">Each answer shows the assistant and API events for that request, in order, with one trace ID.</div></div>
+  </section>
+</main>
+<script>
+const PRESETS = [
+  {n:"03  Outdated VPN answer", q:"How do I connect to the VPN from home?", legacy:true},
+  {n:"04  Retest of 03", q:"How do I connect to the VPN from home?", legacy:true, latest:true},
+  {n:"05  Answers cut off", q:"I forgot my password, how do I reset it?", chunk:12},
+  {n:"07  All tickets failing", q:"Create a ticket: my laptop screen is flickering", fault:"auth_expired"},
+  {n:"08  Intermittent lookups", q:"What's the status of INC0004521?", fault:"rate_limit_first2"},
+  {n:"09  Busy all day", q:"What's the status of INC0004521?", fault:"rate_limit"},
+  {n:"10  Ticket not found", q:"What's the status of ticket 4521?", normalize:false},
+  {n:"11  Retest of 10", q:"What's the status of ticket 4521?"},
+  {n:"12  After API upgrade", q:"Create a ticket: my laptop screen is flickering", fault:"schema_v2"},
+  {n:"Reset to healthy defaults", q:"", reset:true},
+];
+const $ = id => document.getElementById(id);
+function setControls(p) {
+  $("fault").value = p.fault || "none";
+  $("legacy").checked = !!p.legacy; $("latest").checked = !!p.latest;
+  $("normalize").checked = p.normalize !== false; $("chunk").value = p.chunk || 80;
+  if (p.q) $("msg").value = p.q;
+}
+PRESETS.forEach(p => { const b = document.createElement("button"); b.type="button"; b.textContent = p.n; b.onclick = () => { setControls(p); if (p.q) replay(p); }; $("presets").appendChild(b); });
+
+function add(cls, html) { const d = document.createElement("div"); d.className = "msg " + cls; d.innerHTML = html; $("log").appendChild(d); $("log").scrollTop = 1e9; return d; }
+const esc = s => String(s).replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+const tagClass = o => o === "ok" || o === "answered" ? "ok" : (o === "low_confidence" || o === "rate_limited" ? "warn" : "bad");
+
+function renderTimeline(r) {
+  $("trace").textContent = r.trace_id;
+  $("timeline").innerHTML = r.timeline.map(e =>
+    `<div class="ev ${e.component}"><span class="t">+${e.t.toFixed(2)}s</span> <b>${esc(e.component)}</b> ${esc(e.event)}` +
+    (Object.keys(e.data).length ? `<pre>${esc(JSON.stringify(e.data, null, 1))}</pre>` : "") + `</div>`).join("");
+}
+
+const RECORDED = {"03  Outdated VPN answer": {"answer": "According to 'Connect to the VPN from Home (Cisco AnyConnect)' (updated 2022-03-14): To connect to the VPN from home, open Cisco AnyConnect and connect to vpn-old.acme.example. Enter your network username and password, then your RSA token code. The VPN client is installed by default on all laptops. Once the VPN shows connected you can reach the intranet and file shares from home. If you cannot connect to the VPN from home, restart AnyConnect and try the VPN again. Home users should always", "outcome": "answered", "trace_id": "tr-b50dd32c", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "How do I connect to the VPN from home?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "kb", "args": {}}}, {"t": 0.0, "component": "assistant", "event": "retrieval", "data": {"chunk_size_words": 80, "results": [{"doc_id": "vpn-setup-legacy", "chunk_idx": 0, "score": 0.56, "updated": "2022-03-14", "words": 76}, {"doc_id": "vpn-setup", "chunk_idx": 1, "score": 0.229, "updated": "2026-03-02", "words": 40}, {"doc_id": "vpn-setup", "chunk_idx": 0, "score": 0.215, "updated": "2026-03-02", "words": 80}], "conflicts": {"vpn": {"vpn-setup-legacy": "2022-03-14", "vpn-setup": "2026-03-02"}}, "top_is_stale": true}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "answered", "citations": ["vpn-setup-legacy"], "answer": "According to 'Connect to the VPN from Home (Cisco AnyConnect)' (updated 2022-03-14): To connect to the VPN from home, open Cisco AnyConnect and connect to vpn-old.acme.example. Enter your network username and password, then your RSA token code. The VPN client is installed by default on all laptops. Once the VPN shows connected you can reach the intranet and file shares from home. If you cannot connect to the VPN from home, restart AnyConnect and try the VPN again. Home users should always"}}]}, "04  Retest of 03": {"answer": "According to 'Connect to the Corporate VPN (GlobalProtect)' (updated 2026-03-02): drops repeatedly, switch from Wi-Fi to a wired network and reconnect. If you see the error Gateway unreachable, check that your laptop clock is correct and contact the IT Service Desk. Do not use personal VPN software on company laptops.", "outcome": "answered", "trace_id": "tr-1d1fb93a", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "How do I connect to the VPN from home?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "kb", "args": {}}}, {"t": 0.0, "component": "assistant", "event": "conflict_resolved", "data": {"original_top": "vpn-setup-legacy", "preferred": "vpn-setup"}}, {"t": 0.0, "component": "assistant", "event": "retrieval", "data": {"chunk_size_words": 80, "results": [{"doc_id": "vpn-setup", "chunk_idx": 1, "score": 0.229, "updated": "2026-03-02", "words": 40}, {"doc_id": "vpn-setup-legacy", "chunk_idx": 0, "score": 0.56, "updated": "2022-03-14", "words": 76}, {"doc_id": "vpn-setup", "chunk_idx": 0, "score": 0.215, "updated": "2026-03-02", "words": 80}], "conflicts": {"vpn": {"vpn-setup-legacy": "2022-03-14", "vpn-setup": "2026-03-02"}}, "top_is_stale": false}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "answered", "citations": ["vpn-setup"], "answer": "According to 'Connect to the Corporate VPN (GlobalProtect)' (updated 2026-03-02): drops repeatedly, switch from Wi-Fi to a wired network and reconnect. If you see the error Gateway unreachable, check that your laptop clock is correct and contact the IT Service Desk. Do not use personal VPN software on company laptops."}}]}, "05  Answers cut off": {"answer": "According to 'Reset Your Password' (updated 2026-01-20): Forgot password and verify your identity with an Okta Verify push or", "outcome": "answered", "trace_id": "tr-4d64c5eb", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "I forgot my password, how do I reset it?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "kb", "args": {}}}, {"t": 0.0, "component": "assistant", "event": "retrieval", "data": {"chunk_size_words": 12, "results": [{"doc_id": "password-reset", "chunk_idx": 1, "score": 0.622, "updated": "2026-01-20", "words": 12}, {"doc_id": "password-reset", "chunk_idx": 0, "score": 0.576, "updated": "2026-01-20", "words": 12}, {"doc_id": "password-reset", "chunk_idx": 2, "score": 0.35, "updated": "2026-01-20", "words": 12}], "top_is_stale": false}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "answered", "citations": ["password-reset"], "answer": "According to 'Reset Your Password' (updated 2026-01-20): Forgot password and verify your identity with an Okta Verify push or"}}]}, "07  All tickets failing": {"answer": "I couldn't complete that: the ServiceNow integration rejected our credentials. (ref tr-9a8da29b)", "outcome": "auth_failed", "trace_id": "tr-9a8da29b", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "Create a ticket: my laptop screen is flickering"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "tool", "tool": "create_incident", "args": {"short_description": "my laptop screen is flickering"}}}, {"t": 0.0, "component": "api", "event": "error_response", "data": {"status": 401, "message": "User Not Authenticated", "detail": "Required to provide Auth information"}}, {"t": 0.0, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident", "status": 401}}, {"t": 0.0, "component": "assistant", "event": "tool_call", "data": {"tool": "create_incident", "attempt": 1, "args_sent": {"short_description": "my laptop screen is flickering"}, "status": 401}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "auth_failed", "tool": "create_incident", "http_status": 401, "attempts": 1, "answer": "I couldn't complete that: the ServiceNow integration rejected our credentials. (ref tr-9a8da29b)"}}]}, "08  Intermittent lookups": {"answer": "INC0004521 - Outlook keeps asking for password. Status: In Progress.", "outcome": "ok", "trace_id": "tr-df438866", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "What's the status of INC0004521?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "tool", "tool": "get_incident", "args": {"number": "INC0004521"}}}, {"t": 0.0, "component": "api", "event": "error_response", "data": {"status": 429, "message": "Too Many Requests", "detail": "Rate limit exceeded"}}, {"t": 0.0, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 429}}, {"t": 0.0, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 1, "args_sent": {"number": "INC0004521"}, "status": 429}}, {"t": 0.0, "component": "assistant", "event": "retry_scheduled", "data": {"tool": "get_incident", "retry_after_header": "1", "delay_s": 1.0}}, {"t": 1.01, "component": "api", "event": "error_response", "data": {"status": 429, "message": "Too Many Requests", "detail": "Rate limit exceeded"}}, {"t": 1.01, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 429}}, {"t": 1.01, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 2, "args_sent": {"number": "INC0004521"}, "status": 429}}, {"t": 1.01, "component": "assistant", "event": "retry_scheduled", "data": {"tool": "get_incident", "retry_after_header": "1", "delay_s": 1.0}}, {"t": 2.01, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 200}}, {"t": 2.01, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 3, "args_sent": {"number": "INC0004521"}, "status": 200}}, {"t": 2.01, "component": "assistant", "event": "answer", "data": {"outcome": "ok", "tool": "get_incident", "http_status": 200, "attempts": 3, "answer": "INC0004521 - Outlook keeps asking for password. Status: In Progress."}}]}, "09  Busy all day": {"answer": "ServiceNow is busy right now and I couldn't complete that. Please try again shortly. (ref tr-d1b81050)", "outcome": "rate_limited", "trace_id": "tr-d1b81050", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "What's the status of INC0004521?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "tool", "tool": "get_incident", "args": {"number": "INC0004521"}}}, {"t": 0.0, "component": "api", "event": "error_response", "data": {"status": 429, "message": "Too Many Requests", "detail": "Rate limit exceeded"}}, {"t": 0.0, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 429}}, {"t": 0.0, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 1, "args_sent": {"number": "INC0004521"}, "status": 429}}, {"t": 0.0, "component": "assistant", "event": "retry_scheduled", "data": {"tool": "get_incident", "retry_after_header": "1", "delay_s": 1.0}}, {"t": 1.01, "component": "api", "event": "error_response", "data": {"status": 429, "message": "Too Many Requests", "detail": "Rate limit exceeded"}}, {"t": 1.01, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 429}}, {"t": 1.01, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 2, "args_sent": {"number": "INC0004521"}, "status": 429}}, {"t": 1.01, "component": "assistant", "event": "retry_scheduled", "data": {"tool": "get_incident", "retry_after_header": "1", "delay_s": 1.0}}, {"t": 2.01, "component": "api", "event": "error_response", "data": {"status": 429, "message": "Too Many Requests", "detail": "Rate limit exceeded"}}, {"t": 2.01, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 429}}, {"t": 2.01, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 3, "args_sent": {"number": "INC0004521"}, "status": 429}}, {"t": 2.01, "component": "assistant", "event": "answer", "data": {"outcome": "rate_limited", "tool": "get_incident", "http_status": 429, "attempts": 3, "answer": "ServiceNow is busy right now and I couldn't complete that. Please try again shortly. (ref tr-d1b81050)"}}]}, "10  Ticket not found": {"answer": "I couldn't find that ticket. Please double-check the number. (ref tr-42353801)", "outcome": "not_found", "trace_id": "tr-42353801", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "What's the status of ticket 4521?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "tool", "tool": "get_incident", "args": {"number": "4521"}}}, {"t": 0.0, "component": "api", "event": "error_response", "data": {"status": 404, "message": "No Record found", "detail": "Record doesn't exist or ACL restricts the record retrieval"}}, {"t": 0.0, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/4521", "status": 404}}, {"t": 0.0, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 1, "args_sent": {"number": "4521"}, "status": 404}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "not_found", "tool": "get_incident", "http_status": 404, "attempts": 1, "answer": "I couldn't find that ticket. Please double-check the number. (ref tr-42353801)"}}]}, "11  Retest of 10": {"answer": "INC0004521 - Outlook keeps asking for password. Status: In Progress.", "outcome": "ok", "trace_id": "tr-914a1d07", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "What's the status of ticket 4521?"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "tool", "tool": "get_incident", "args": {"number": "4521"}}}, {"t": 0.0, "component": "assistant", "event": "arg_normalized", "data": {"arg": "number", "before": "4521", "after": "INC0004521"}}, {"t": 0.0, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident/INC0004521", "status": 200}}, {"t": 0.0, "component": "assistant", "event": "tool_call", "data": {"tool": "get_incident", "attempt": 1, "args_sent": {"number": "INC0004521"}, "status": 200}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "ok", "tool": "get_incident", "http_status": 200, "attempts": 1, "answer": "INC0004521 - Outlook keeps asking for password. Status: In Progress."}}]}, "12  After API upgrade": {"answer": "ServiceNow rejected the request I sent, so nothing was changed. (ref tr-495fcec8)", "outcome": "bad_request", "trace_id": "tr-495fcec8", "timeline": [{"t": 0.0, "component": "assistant", "event": "request_received", "data": {"message": "Create a ticket: my laptop screen is flickering"}}, {"t": 0.0, "component": "assistant", "event": "plan", "data": {"action": "tool", "tool": "create_incident", "args": {"short_description": "my laptop screen is flickering"}}}, {"t": 0.0, "component": "api", "event": "error_response", "data": {"status": 422, "message": "Invalid request", "detail": "Field 'summary' is required"}}, {"t": 0.0, "component": "api", "event": "http_request", "data": {"path": "/api/now/table/incident", "status": 422}}, {"t": 0.0, "component": "assistant", "event": "tool_call", "data": {"tool": "create_incident", "attempt": 1, "args_sent": {"short_description": "my laptop screen is flickering"}, "status": 422}}, {"t": 0.0, "component": "assistant", "event": "answer", "data": {"outcome": "bad_request", "tool": "create_incident", "http_status": 422, "attempts": 1, "answer": "ServiceNow rejected the request I sent, so nothing was changed. (ref tr-495fcec8)"}}]}};
+function replay(p) {
+  const r = RECORDED[p.n]; if (!r) return;
+  add("me", esc(p.q));
+  add("bot", `<span class="tag ${tagClass(r.outcome)}">${esc(r.outcome)}</span><br>${esc(r.answer)}`);
+  renderTimeline(r);
+}
+$("form").onsubmit = ev => {
+  ev.preventDefault();
+  add("bot", "<span class='hint'>This is a recorded demo, so typing is turned off. Click a scenario on the left, or run the app locally for live chat (see the README).</span>");
+};
+</script>
+</body>
+</html>

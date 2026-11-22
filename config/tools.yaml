@@ -1,0 +1,27 @@
+# Tool definitions the agent is allowed to call. Behavior changes here are
+# configuration changes, not code changes (same idea as configuring an assistant
+# per customer).
+tools:
+  create_incident:
+    description: Create a new incident
+    method: POST
+    path: /api/now/table/incident
+    required_args: [short_description]
+    optional_args: [description, urgency]
+    expects: [number, short_description]   # fields the agent needs in the response
+
+  get_incident:
+    description: Look up an incident by number
+    method: GET
+    path: /api/now/table/incident/{number}
+    required_args: [number]
+    normalize: {number: incident_number}
+    expects: [number, short_description, state]
+
+  update_incident:
+    description: Add a work note to an incident
+    method: PATCH
+    path: /api/now/table/incident/{number}
+    required_args: [number, work_notes]
+    normalize: {number: incident_number}
+    expects: [number]
